@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -17,7 +18,8 @@ namespace SPPS2001D_Pro.ViewModels
         public bool LoggingEnabled { get; set; }
         public string SerialConnectText => Serial.IsOpen ? "Disconnect" : "Connect";
 
-        private double _vset, _iset, _vread, _iread;
+        private double _vread, _iread;
+        private string _vsetText = "", _isetText = "";
         private string _mode = "(n/a)", _log = "";
         private bool _isOutputOn;
         private CancellationTokenSource? _autoCts;
@@ -42,8 +44,31 @@ namespace SPPS2001D_Pro.ViewModels
             }
         }
 
-        public double Vset { get => _vset; set { _vset = value; OnPropertyChanged(); } }
-        public double Iset { get => _iset; set { _iset = value; OnPropertyChanged(); } }
+        public string VsetText
+        {
+            get => _vsetText;
+            set
+            {
+                if (_vsetText != value)
+                {
+                    _vsetText = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string IsetText
+        {
+            get => _isetText;
+            set
+            {
+                if (_isetText != value)
+                {
+                    _isetText = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         public double Vread
         {
@@ -138,8 +163,8 @@ namespace SPPS2001D_Pro.ViewModels
 
             RemoteModeCommand = new RelayCommand(async _ => await Serial.SendRemoteAsync());
             LocalModeCommand = new RelayCommand(async _ => await Serial.SendLocalAsync());
-            SetVCommand = new RelayCommand(async _ => await Serial.SendSetVoltageAsync(Protocol.Encode6(Vset)));
-            SetICommand = new RelayCommand(async _ => await Serial.SendSetCurrentAsync(Protocol.Encode6(Iset)));
+            SetVCommand = new RelayCommand(async _ => await SetVoltageAsync());
+            SetICommand = new RelayCommand(async _ => await SetCurrentAsync());
 
             OutputOnCommand = new RelayCommand(async _ =>
             {
@@ -154,6 +179,34 @@ namespace SPPS2001D_Pro.ViewModels
             });
 
             QueryVICommand = new RelayCommand(async _ => await QueryVI());
+        }
+
+        private static bool TryParseSetpoint(string text, out double value)
+        {
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value) ||
+                   double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        }
+
+        private async Task SetCurrentAsync()
+        {
+            if (!TryParseSetpoint(IsetText, out double value) || value < 0)
+            {
+                Append("Invalid current setpoint. Enter a non-negative number such as 0.100.");
+                return;
+            }
+
+            await Serial.SendSetCurrentAsync(Protocol.Encode6(value));
+        }
+
+        private async Task SetVoltageAsync()
+        {
+            if (!TryParseSetpoint(VsetText, out double value) || value < 0)
+            {
+                Append("Invalid voltage setpoint. Enter a non-negative number such as 12.000.");
+                return;
+            }
+
+            await Serial.SendSetVoltageAsync(Protocol.Encode6(value));
         }
 
         private async Task AutoQueryLoop(CancellationToken ct)
@@ -174,7 +227,6 @@ namespace SPPS2001D_Pro.ViewModels
                         Append("No readback frames received yet. Check PSU remote/lock state and selected COM port.");
                     }
 
-                    // Refresh quickly, but leave headroom for commands initiated by the user.
                     await Task.Delay(AutoQueryIntervalMs, ct);
                 }
             }
@@ -190,8 +242,6 @@ namespace SPPS2001D_Pro.ViewModels
             await _queryLock.WaitAsync();
             try
             {
-                // One request at a time. We wait for the matching readback before sending
-                // the next request, which avoids a backlog of replies on slower hardware.
                 bool gotCurrent = await QueryAndWaitAsync(
                     Serial.QueryCurrent033Async,
                     () => _lastCurrentReadbackUtc);
