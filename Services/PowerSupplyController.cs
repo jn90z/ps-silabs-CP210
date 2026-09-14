@@ -22,6 +22,8 @@ namespace SPPS2001D_Pro.Services
         private bool _readbackWarningShown;
         private readonly SemaphoreSlim _queryLock = new(1, 1), _jobLock = new(1, 1);
         private const int ReadbackResponseTimeoutMs = 100, AutoQueryIntervalMs = 300;
+        private const int VerificationAttempts = 4, VerificationDelayMs = 125;
+        private const double VerificationPercentTolerance = 0.02, VerificationVoltageFloor = 0.10, VerificationCurrentFloor = 0.010;
 
         public double VoltageReadback { get => _voltageReadback; private set => SetField(ref _voltageReadback, value); }
         public double CurrentReadback { get => _currentReadback; private set => SetField(ref _currentReadback, value); }
@@ -65,20 +67,28 @@ namespace SPPS2001D_Pro.Services
             ArgumentNullException.ThrowIfNull(recipe); ValidateRecipe(recipe); await _jobLock.WaitAsync(ct);
             try
             {
-                ProductionState = ProductionState.LoadingRecipe; OnPropertyChanged(nameof(IsJobActive));
+                ProductionState = ProductionState.LoadingRecipe; ActiveRecipe = null; OnPropertyChanged(nameof(IsJobActive));
                 if (!Serial.IsOpen && !await ConnectAsync()) return SetJobFault("Unable to connect to the power supply while loading the job.");
                 if (!await OutputOffAsync()) return SetJobFault("Unable to turn the power supply output off before loading the recipe.");
                 if (!await SetRemoteModeAsync()) return SetJobFault("Unable to place the power supply in remote mode.");
                 if (!await SetVoltageAsync(recipe.Voltage)) return SetJobFault("Unable to send the recipe voltage.");
                 if (!await SetCurrentAsync(recipe.Current)) return SetJobFault("Unable to send the recipe current.");
-                ActiveRecipe = recipe;
                 if (!await OutputOnAsync()) return SetJobFault("Recipe loaded, but the power supply output could not be enabled.");
+
+                if (!await VerifyRecipeReadbackAsync(recipe, ct))
+                {
+                    try { await OutputOffAsync(); } catch { }
+                    ActiveRecipe = null;
+                    return SetJobFault($"Recipe verification failed for {recipe.PartNumber}. Output was turned off.");
+                }
+
+                ActiveRecipe = recipe;
                 ProductionState = ProductionState.JobActive; OnPropertyChanged(nameof(IsJobActive));
-                Message?.Invoke($"Job recipe active: {recipe.PartNumber} - {recipe.Voltage:0.000} V / {recipe.Current:0.000} A. Output will remain on until the job is unloaded or changed.");
+                Message?.Invoke($"Job recipe verified and active: {recipe.PartNumber} - {recipe.Voltage:0.000} V / {recipe.Current:0.000} A. Output will remain on until the job is unloaded or changed.");
                 return true;
             }
-            catch (OperationCanceledException) { await OutputOffAsync(); ActiveRecipe = null; ProductionState = ProductionState.NoJob; OnPropertyChanged(nameof(IsJobActive)); throw; }
-            catch (Exception ex) { try { await OutputOffAsync(); } catch { } return SetJobFault("Job load failed: " + ex.Message); }
+            catch (OperationCanceledException) { try { await OutputOffAsync(); } catch { } ActiveRecipe = null; ProductionState = ProductionState.NoJob; OnPropertyChanged(nameof(IsJobActive)); throw; }
+            catch (Exception ex) { try { await OutputOffAsync(); } catch { } ActiveRecipe = null; return SetJobFault("Job load failed: " + ex.Message); }
             finally { _jobLock.Release(); }
         }
 
@@ -86,7 +96,7 @@ namespace SPPS2001D_Pro.Services
         {
             ArgumentNullException.ThrowIfNull(recipeProvider);
             var recipe = await recipeProvider.GetRecipeAsync(partNumber, ct);
-            if (recipe is null) { await OutputOffAsync(); ActiveRecipe = null; return SetJobFault($"No power-supply recipe found for part number {partNumber}."); }
+            if (recipe is null) { if (Serial.IsOpen) await OutputOffAsync(); ActiveRecipe = null; return SetJobFault($"No power-supply recipe found for part number {partNumber}."); }
             return await LoadJobAsync(recipe, ct);
         }
 
@@ -97,6 +107,42 @@ namespace SPPS2001D_Pro.Services
             finally { _jobLock.Release(); }
         }
 
+        private async Task<bool> VerifyRecipeReadbackAsync(PowerSupplyRecipe recipe, CancellationToken ct)
+        {
+            for (int attempt = 1; attempt <= VerificationAttempts; attempt++)
+            {
+                DateTime voltageBefore = _lastVoltageReadbackUtc;
+                DateTime currentBefore = _lastCurrentReadbackUtc;
+                await QueryReadbackAsync(ct);
+
+                bool freshVoltage = _lastVoltageReadbackUtc > voltageBefore;
+                bool freshCurrent = _lastCurrentReadbackUtc > currentBefore;
+                if (freshVoltage && freshCurrent)
+                {
+                    double voltageTolerance = Math.Max(VerificationVoltageFloor, Math.Abs(recipe.Voltage) * VerificationPercentTolerance);
+                    double currentTolerance = Math.Max(VerificationCurrentFloor, Math.Abs(recipe.Current) * VerificationPercentTolerance);
+
+                    if (Mode == "CV" && Math.Abs(VoltageReadback - recipe.Voltage) <= voltageTolerance)
+                    {
+                        Message?.Invoke($"Recipe verification passed in CV mode: {VoltageReadback:0.000} V, {CurrentReadback:0.000} A.");
+                        return true;
+                    }
+
+                    if (Mode == "CC" && Math.Abs(CurrentReadback - recipe.Current) <= currentTolerance)
+                    {
+                        Message?.Invoke($"Recipe verification passed in CC mode: {VoltageReadback:0.000} V, {CurrentReadback:0.000} A.");
+                        return true;
+                    }
+                }
+
+                if (attempt < VerificationAttempts)
+                    await Task.Delay(VerificationDelayMs, ct);
+            }
+
+            Message?.Invoke($"Recipe readback did not verify. Expected {recipe.Voltage:0.000} V / {recipe.Current:0.000} A; read {VoltageReadback:0.000} V / {CurrentReadback:0.000} A, mode {Mode}.");
+            return false;
+        }
+
         private static void ValidateRecipe(PowerSupplyRecipe recipe)
         {
             if (string.IsNullOrWhiteSpace(recipe.PartNumber)) throw new ArgumentException("Recipe part number is required.", nameof(recipe));
@@ -104,7 +150,7 @@ namespace SPPS2001D_Pro.Services
             if (recipe.MaxVoltage.HasValue && recipe.Voltage > recipe.MaxVoltage.Value) throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe voltage exceeds MaxVoltage.");
             if (recipe.MaxCurrent.HasValue && recipe.Current > recipe.MaxCurrent.Value) throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe current exceeds MaxCurrent.");
         }
-        private bool SetJobFault(string message) { ProductionState = ProductionState.Fault; OnPropertyChanged(nameof(IsJobActive)); Message?.Invoke(message); return false; }
+        private bool SetJobFault(string message) { ActiveRecipe = null; ProductionState = ProductionState.Fault; OnPropertyChanged(nameof(IsJobActive)); Message?.Invoke(message); return false; }
 
         public async Task QueryReadbackAsync(CancellationToken ct = default)
         {
