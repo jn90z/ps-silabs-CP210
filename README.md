@@ -22,6 +22,35 @@ The project is being developed first as a reliable standalone power-supply contr
 - Response-paced serial polling to avoid overlapping commands
 - Buffered serial-frame handling for partial or multiple USB/UART reads
 
+## USB Driver Requirement
+
+This application communicates with the power supply through a Silicon Labs CP210x USB-to-UART bridge. Windows must have the **Silicon Labs CP210x USB to UART Bridge Virtual COM Port (VCP) driver** installed so the device appears as a standard COM port.
+
+Silicon Labs states that the CP210x VCP driver is required when using CP210x devices as a Virtual COM Port.
+
+Official driver download:
+
+https://www.silabs.com/software-and-tools/usb-to-uart-bridge-vcp-drivers
+
+The driver installer is intentionally **not bundled in this repository**. Download the current version directly from Silicon Labs so that the appropriate supported driver is used.
+
+### Verify the driver in Windows
+
+1. Connect the power supply to the PC with USB.
+2. Open **Device Manager**.
+3. Expand **Ports (COM & LPT)**.
+4. Look for a device similar to:
+
+```text
+Silicon Labs CP210x USB to UART Bridge (COMx)
+```
+
+5. Note the COM-port number and confirm that the application can see the same port.
+
+If the CP210x device does not appear under **Ports (COM & LPT)**, install or reinstall the Silicon Labs VCP driver and reconnect the USB cable.
+
+Windows may install a compatible driver automatically through Windows Update on some systems, but installing the current Silicon Labs VCP package directly is the recommended troubleshooting path when the device is not detected correctly.
+
 ## Architecture
 
 The application is intentionally separated into layers so that the power-supply control logic is not tied directly to the WPF user interface.
@@ -130,6 +159,7 @@ New functionality is developed and validated on `improvements` before being cons
 ### Requirements
 
 - Windows 10 or Windows 11
+- Silicon Labs CP210x VCP driver
 - .NET 8 SDK
 - Visual Studio 2022 or another .NET 8-capable development environment
 
@@ -164,6 +194,8 @@ CI currently runs for the stable and active-development branches.
 ## Planned Improvements
 
 Near-term development is focused on making the application suitable for dependable standalone bench and production use. Planned work includes configurable voltage/current safety limits, stricter protocol validation, communication diagnostics and statistics, command/readback confirmation, improved asynchronous command handling, connection-health monitoring, presets, and clearer indication of manual versus automation control.
+
+A future startup diagnostic is also planned so the application can provide a clearer message when no compatible CP210x/USB serial device is detected, including guidance to verify the VCP driver installation.
 
 Longer-term work will add a local automation interface suitable for Plex / Rockwell Automation while continuing to use the same `PowerSupplyController` used by the desktop application.
 
