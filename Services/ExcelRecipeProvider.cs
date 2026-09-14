@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
 using SPPS2001D_Pro.Models;
 using System.Globalization;
+using System.IO;
 
 namespace SPPS2001D_Pro.Services
 {
@@ -36,7 +37,7 @@ namespace SPPS2001D_Pro.Services
             if (!File.Exists(_workbookPath))
                 throw new FileNotFoundException("Recipe workbook was not found.", _workbookPath);
 
-            using var workbook = new XLWorkbook(_workbookPath, XLEventTracking.Disabled);
+            using var workbook = new XLWorkbook(_workbookPath);
             var worksheet = string.IsNullOrWhiteSpace(_worksheetName)
                 ? workbook.Worksheets.FirstOrDefault()
                 : workbook.Worksheets.FirstOrDefault(w => string.Equals(w.Name, _worksheetName, StringComparison.OrdinalIgnoreCase));
