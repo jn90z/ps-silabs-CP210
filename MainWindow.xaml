@@ -3,20 +3,253 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  Title="SPPS2001D Pro — 6-Digit Protocol" Height="640" Width="900" Background="#121212">
   <Window.Resources>
-    <Style x:Key="DarkButton" TargetType="Button"><Setter Property="Background" Value="#222831"/><Setter Property="Foreground" Value="#EDEDED"/><Setter Property="BorderBrush" Value="#4B5563"/><Setter Property="Padding" Value="8,4"/><Setter Property="Margin" Value="4"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
-    <Style x:Key="OutputOnButton" TargetType="Button" BasedOn="{StaticResource DarkButton}"><Style.Triggers><DataTrigger Binding="{Binding IsOutputOn}" Value="True"><Setter Property="Background" Value="#DC2626"/><Setter Property="Foreground" Value="#FFFFFF"/><Setter Property="BorderBrush" Value="#FCA5A5"/></DataTrigger></Style.Triggers></Style>
-    <Style x:Key="DarkTextBox" TargetType="TextBox"><Setter Property="Background" Value="#0B0F14"/><Setter Property="Foreground" Value="#EDEDED"/><Setter Property="BorderBrush" Value="#4B5563"/><Setter Property="CaretBrush" Value="#00D7FF"/><Setter Property="Padding" Value="6,3"/></Style>
-    <Style x:Key="DarkComboBoxItem" TargetType="{x:Type ComboBoxItem}"><Setter Property="Background" Value="#111827"/><Setter Property="Foreground" Value="#F9FAFB"/><Setter Property="Padding" Value="8,5"/><Setter Property="MinHeight" Value="26"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
+    <Style x:Key="DarkButton" TargetType="Button">
+      <Setter Property="Background" Value="#222831"/>
+      <Setter Property="Foreground" Value="#EDEDED"/>
+      <Setter Property="BorderBrush" Value="#4B5563"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="Margin" Value="4"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <Style x:Key="OutputOnButton" TargetType="Button" BasedOn="{StaticResource DarkButton}">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsOutputOn}" Value="True">
+          <Setter Property="Background" Value="#DC2626"/>
+          <Setter Property="Foreground" Value="#FFFFFF"/>
+          <Setter Property="BorderBrush" Value="#FCA5A5"/>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="DarkTextBox" TargetType="TextBox">
+      <Setter Property="Background" Value="#0B0F14"/>
+      <Setter Property="Foreground" Value="#EDEDED"/>
+      <Setter Property="BorderBrush" Value="#4B5563"/>
+      <Setter Property="CaretBrush" Value="#00D7FF"/>
+      <Setter Property="Padding" Value="6,3"/>
+    </Style>
+
+    <Style x:Key="DarkComboBoxItem" TargetType="{x:Type ComboBoxItem}">
+      <Setter Property="Background" Value="#111827"/>
+      <Setter Property="Foreground" Value="#F9FAFB"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type ComboBoxItem}">
+            <Border x:Name="Bd"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="#374151"
+                    BorderThickness="0,0,0,1"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Stretch"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FACC15"/>
+                <Setter Property="Foreground" Value="#000000"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#22C55E"/>
+                <Setter Property="Foreground" Value="#000000"/>
+              </Trigger>
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsHighlighted" Value="True"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="Bd" Property="Background" Value="#F97316"/>
+                <Setter Property="Foreground" Value="#000000"/>
+              </MultiTrigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="DarkComboBox" TargetType="{x:Type ComboBox}">
+      <Setter Property="Foreground" Value="#F9FAFB"/>
+      <Setter Property="Background" Value="#0B0F14"/>
+      <Setter Property="BorderBrush" Value="#4B5563"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboBoxItem}"/>
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type ComboBox}">
+            <Grid>
+              <ToggleButton x:Name="ToggleButton"
+                            Focusable="False"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                            ClickMode="Press">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="{x:Type ToggleButton}">
+                    <Border x:Name="Outer"
+                            Background="#0B0F14"
+                            BorderBrush="#4B5563"
+                            BorderThickness="1"
+                            CornerRadius="3">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="24"/>
+                        </Grid.ColumnDefinitions>
+                        <ContentPresenter Grid.Column="0"
+                                          Margin="8,0,4,0"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="Left"
+                                          Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}"
+                                          TextElement.Foreground="#F9FAFB"/>
+                        <Path Grid.Column="1"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              Fill="#F9FAFB"
+                              Data="M 0 0 L 4 4 L 8 0 Z"/>
+                      </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Outer" Property="BorderBrush" Value="#38BDF8"/>
+                        <Setter TargetName="Outer" Property="Background" Value="#111827"/>
+                      </Trigger>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="Outer" Property="BorderBrush" Value="#FACC15"/>
+                      </Trigger>
+                      <Trigger Property="IsEnabled" Value="False">
+                        <Setter TargetName="Outer" Property="Opacity" Value="0.55"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+
+              <Popup x:Name="PART_Popup"
+                     AllowsTransparency="True"
+                     Focusable="False"
+                     IsOpen="{TemplateBinding IsDropDownOpen}"
+                     Placement="Bottom"
+                     PopupAnimation="Slide">
+                <Border Background="#111827"
+                        BorderBrush="#38BDF8"
+                        BorderThickness="2"
+                        CornerRadius="3"
+                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                  <ScrollViewer MaxHeight="260">
+                    <ItemsPresenter/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
+
   <Grid Margin="14">
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <Border Grid.Row="0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,12"><StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-      <TextBlock Text="COM:" Foreground="#EDEDED" VerticalAlignment="Center"/><ComboBox x:Name="ComPortsCombo" Width="150" Margin="6,0,0,0" ItemsSource="{Binding Serial.Ports}" SelectedItem="{Binding Serial.SelectedPort}" DisplayMemberPath="DisplayName" DropDownOpened="ComPortsCombo_DropDownOpened"/><ComboBox Width="95" Margin="10,0,0,0" ItemsSource="{Binding Serial.BaudRates}" SelectedItem="{Binding Serial.SelectedBaud}"/><Button Style="{StaticResource DarkButton}" Width="115" Content="{Binding SerialConnectText}" Command="{Binding ToggleConnectCommand}"/><Button Style="{StaticResource DarkButton}" Width="110" Content="Remote" Command="{Binding RemoteModeCommand}"/><Button Style="{StaticResource DarkButton}" Width="90" Content="Local" Command="{Binding LocalModeCommand}"/><Border Margin="14,0,0,0" Padding="8,3" CornerRadius="6" BorderThickness="1" BorderBrush="{Binding StatusBrush}"><TextBlock Text="{Binding Serial.Status}" Foreground="{Binding StatusBrush}" FontWeight="Bold"/></Border><CheckBox Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#EDEDED" Content="CSV Log" IsChecked="{Binding LoggingEnabled}"/>
-    </StackPanel></Border>
-    <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-      <Border Grid.Column="0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,12,0"><StackPanel><TextBlock Text="Setpoints" Foreground="#EDEDED" FontSize="18" FontWeight="Bold" Margin="0,0,0,10"/><TextBlock Text="Voltage (V)" Foreground="#7BE8FF" FontWeight="SemiBold"/><StackPanel Orientation="Horizontal" Margin="0,4,0,12"><TextBox Style="{StaticResource DarkTextBox}" Width="125" Text="{Binding Vset}" TextChanged="TextBox_TextChanged"/><Button Style="{StaticResource DarkButton}" Width="80" Content="Set V" Command="{Binding SetVCommand}"/></StackPanel><TextBlock Text="Current (A)" Foreground="#5AAEFF" FontWeight="SemiBold"/><StackPanel Orientation="Horizontal" Margin="0,4,0,16"><TextBox Style="{StaticResource DarkTextBox}" Width="125" Text="{Binding Iset}"/><Button Style="{StaticResource DarkButton}" Width="80" Content="Set I" Command="{Binding SetICommand}"/></StackPanel><Separator Margin="0,6,0,12" Background="#333A45"/><Button Style="{StaticResource OutputOnButton}" Content="Output ON" Height="34" Command="{Binding OutputOnCommand}"/><Button Style="{StaticResource DarkButton}" Content="Output OFF" Height="34" Command="{Binding OutputOffCommand}"/></StackPanel></Border>
-      <Border Grid.Column="1" Background="#050607" BorderBrush="#2F343B" BorderThickness="3" CornerRadius="18" Padding="18"><Border Background="#0B0D10" BorderBrush="#151A20" BorderThickness="2" CornerRadius="8" Padding="22"><Grid><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions><TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding DisplayModeLabel}" Foreground="{Binding ModeBrush}" FontFamily="Consolas" FontSize="34" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,10,0"/><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding VoltageDisplay}" Foreground="#36DFFF" FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/><TextBlock Grid.Row="0" Grid.Column="2" Text="V" Foreground="#8EEFFF" FontFamily="Consolas" FontSize="42" FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CurrentDisplay}" Foreground="#208CFF" FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/><TextBlock Grid.Row="1" Grid.Column="2" Text="A" Foreground="#3A9DFF" FontFamily="Consolas" FontSize="42" FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding PowerDisplay}" Foreground="#A569FF" FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/><TextBlock Grid.Row="2" Grid.Column="2" Text="W" Foreground="#B77AFF" FontFamily="Consolas" FontSize="42" FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/></Grid></Border></Border>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <Border Grid.Row="0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,12">
+      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock Text="COM:" Foreground="#EDEDED" VerticalAlignment="Center"/>
+        <ComboBox x:Name="ComPortsCombo" Style="{StaticResource DarkComboBox}" Width="150" Margin="6,0,0,0"
+                  ItemsSource="{Binding Serial.Ports}"
+                  SelectedItem="{Binding Serial.SelectedPort}"
+                  DisplayMemberPath="DisplayName"
+                  DropDownOpened="ComPortsCombo_DropDownOpened"/>
+        <ComboBox Style="{StaticResource DarkComboBox}" Width="95" Margin="10,0,0,0"
+                  ItemsSource="{Binding Serial.BaudRates}" SelectedItem="{Binding Serial.SelectedBaud}"/>
+        <Button Style="{StaticResource DarkButton}" Width="115" Content="{Binding SerialConnectText}" Command="{Binding ToggleConnectCommand}"/>
+        <Button Style="{StaticResource DarkButton}" Width="110" Content="Remote" Command="{Binding RemoteModeCommand}"/>
+        <Button Style="{StaticResource DarkButton}" Width="90" Content="Local" Command="{Binding LocalModeCommand}"/>
+        <Border Margin="14,0,0,0" Padding="8,3" CornerRadius="6" BorderThickness="1" BorderBrush="{Binding StatusBrush}">
+          <TextBlock Text="{Binding Serial.Status}" Foreground="{Binding StatusBrush}" FontWeight="Bold"/>
+        </Border>
+        <CheckBox Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#EDEDED" Content="CSV Log" IsChecked="{Binding LoggingEnabled}"/>
+      </StackPanel>
+    </Border>
+
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="260"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,12,0">
+        <StackPanel>
+          <TextBlock Text="Setpoints" Foreground="#EDEDED" FontSize="18" FontWeight="Bold" Margin="0,0,0,10"/>
+
+          <TextBlock Text="Current (A)" Foreground="#5AAEFF" FontWeight="SemiBold"/>
+          <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
+            <TextBox x:Name="CurrentSetpointBox" Style="{StaticResource DarkTextBox}" Width="125" TabIndex="0"
+                     Text="{Binding Iset, UpdateSourceTrigger=PropertyChanged}"/>
+            <Button Style="{StaticResource DarkButton}" Width="80" IsTabStop="False" Content="Set I" Command="{Binding SetICommand}"/>
+          </StackPanel>
+
+          <TextBlock Text="Voltage (V)" Foreground="#7BE8FF" FontWeight="SemiBold"/>
+          <StackPanel Orientation="Horizontal" Margin="0,4,0,16">
+            <TextBox x:Name="VoltageSetpointBox" Style="{StaticResource DarkTextBox}" Width="125" TabIndex="1"
+                     Text="{Binding Vset, UpdateSourceTrigger=PropertyChanged}"/>
+            <Button Style="{StaticResource DarkButton}" Width="80" IsTabStop="False" Content="Set V" Command="{Binding SetVCommand}"/>
+          </StackPanel>
+
+          <Separator Margin="0,6,0,12" Background="#333A45"/>
+
+          <Button Style="{StaticResource OutputOnButton}" Content="Output ON" Height="34" Command="{Binding OutputOnCommand}"/>
+          <Button Style="{StaticResource DarkButton}" Content="Output OFF" Height="34" Command="{Binding OutputOffCommand}"/>
+          <!-- Query button hidden; auto-query runs while connected.
+          <Button Style="{StaticResource DarkButton}" Content="Query V/I" Height="34" Command="{Binding QueryVICommand}"/>
+          -->
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Column="1" Background="#050607" BorderBrush="#2F343B" BorderThickness="3" CornerRadius="18" Padding="18">
+        <Border Background="#0B0D10" BorderBrush="#151A20" BorderThickness="2" CornerRadius="8" Padding="22">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="90"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="80"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding DisplayModeLabel}" Foreground="{Binding ModeBrush}"
+                       FontFamily="Consolas" FontSize="34" FontWeight="Bold" VerticalAlignment="Center"
+                       HorizontalAlignment="Right" Margin="0,0,10,0"/>
+
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding VoltageDisplay}" Foreground="#36DFFF"
+                       FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="V" Foreground="#8EEFFF" FontFamily="Consolas" FontSize="42"
+                       FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CurrentDisplay}" Foreground="#208CFF"
+                       FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="A" Foreground="#3A9DFF" FontFamily="Consolas" FontSize="42"
+                       FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding PowerDisplay}" Foreground="#A569FF"
+                       FontFamily="Consolas" FontSize="76" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+            <TextBlock Grid.Row="2" Grid.Column="2" Text="W" Foreground="#B77AFF" FontFamily="Consolas" FontSize="42"
+                       FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+          </Grid>
+        </Border>
+      </Border>
     </Grid>
-    <Border Grid.Row="2" Margin="0,12,0,0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="8"><TextBox Text="{Binding Log}" Background="#0B0F14" Foreground="#D7D7D7" BorderThickness="0" FontFamily="Consolas" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Height="88"/></Border>
+
+    <Border Grid.Row="2" Margin="0,12,0,0" Background="#181C22" BorderBrush="#333A45" BorderThickness="1" CornerRadius="8" Padding="8">
+      <TextBox Text="{Binding Log}" Background="#0B0F14" Foreground="#D7D7D7" BorderThickness="0" FontFamily="Consolas"
+               IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Height="88"/>
+    </Border>
   </Grid>
 </Window>
