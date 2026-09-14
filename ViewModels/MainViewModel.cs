@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -14,35 +13,13 @@ namespace SPPS2001D_Pro.ViewModels
 {
     public class MainViewModel : INotifyPropertyChanged
     {
-        public SerialService Serial { get; } = new();
+        public PowerSupplyController Controller { get; } = new();
+        public SerialService Serial => Controller.Serial;
         public bool LoggingEnabled { get; set; }
         public string SerialConnectText => Serial.IsOpen ? "Disconnect" : "Connect";
 
-        private double _vread, _iread;
         private string _vsetText = "", _isetText = "";
-        private string _mode = "(n/a)", _log = "";
-        private bool _isOutputOn;
-        private CancellationTokenSource? _autoCts;
-        private DateTime _lastReadbackUtc = DateTime.MinValue;
-        private DateTime _lastVoltageReadbackUtc = DateTime.MinValue;
-        private DateTime _lastCurrentReadbackUtc = DateTime.MinValue;
-        private bool _readbackWarningShown;
-        private readonly SemaphoreSlim _queryLock = new(1, 1);
-        private const int ReadbackResponseTimeoutMs = 100;
-        private const int AutoQueryIntervalMs = 300;
-
-        public bool IsOutputOn
-        {
-            get => _isOutputOn;
-            set
-            {
-                if (_isOutputOn != value)
-                {
-                    _isOutputOn = value;
-                    OnPropertyChanged();
-                }
-            }
-        }
+        private string _log = "";
 
         public string VsetText
         {
@@ -70,43 +47,20 @@ namespace SPPS2001D_Pro.ViewModels
             }
         }
 
-        public double Vread
+        public bool IsOutputOn => Controller.IsOutputOn;
+        public double Vread => Controller.VoltageReadback;
+        public double Iread => Controller.CurrentReadback;
+        public string Mode => Controller.Mode;
+
+        public string Log
         {
-            get => _vread;
+            get => _log;
             set
             {
-                _vread = value;
+                _log = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(VoltageDisplay));
-                OnPropertyChanged(nameof(PowerDisplay));
             }
         }
-
-        public double Iread
-        {
-            get => _iread;
-            set
-            {
-                _iread = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(CurrentDisplay));
-                OnPropertyChanged(nameof(PowerDisplay));
-            }
-        }
-
-        public string Mode
-        {
-            get => _mode;
-            set
-            {
-                _mode = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(DisplayModeLabel));
-                OnPropertyChanged(nameof(ModeBrush));
-            }
-        }
-
-        public string Log { get => _log; set { _log = value; OnPropertyChanged(); } }
 
         public string VoltageDisplay => Vread.ToString("000.0");
         public string CurrentDisplay => Iread.ToString("0.000");
@@ -129,56 +83,71 @@ namespace SPPS2001D_Pro.ViewModels
 
         public MainViewModel()
         {
-            _ = Serial.RefreshPortsAsync();
-            Serial.FrameReceived += OnFrame;
+            _ = Controller.RefreshPortsAsync();
+
             Serial.PropertyChanged += (_, __) =>
             {
-                OnPropertyChanged(nameof(SerialConnectText));
-                OnPropertyChanged(nameof(StatusBrush));
+                RunOnUi(() =>
+                {
+                    OnPropertyChanged(nameof(SerialConnectText));
+                    OnPropertyChanged(nameof(StatusBrush));
+                });
             };
+
+            Controller.PropertyChanged += (_, e) =>
+            {
+                RunOnUi(() => HandleControllerPropertyChanged(e.PropertyName));
+            };
+
+            Controller.Message += message => RunOnUi(() => Append(message));
+            Controller.RawFrameReceived += frame => RunOnUi(() => LogFrameIfEnabled(frame));
 
             ToggleConnectCommand = new RelayCommand(async _ =>
             {
                 if (Serial.IsOpen)
-                {
-                    _autoCts?.Cancel();
-
-                    await Serial.SafeDisconnectAsync();
-                    IsOutputOn = false;
-                }
-                else if (await Serial.OpenAsync())
-                {
-                    _lastReadbackUtc = DateTime.MinValue;
-                    _lastVoltageReadbackUtc = DateTime.MinValue;
-                    _lastCurrentReadbackUtc = DateTime.MinValue;
-                    _readbackWarningShown = false;
-                    _autoCts = new CancellationTokenSource();
-                    _ = AutoQueryLoop(_autoCts.Token);
-                    Append("Connected. Response-paced auto-query started.");
-                }
+                    await Controller.DisconnectAsync();
+                else
+                    await Controller.ConnectAsync();
 
                 OnPropertyChanged(nameof(SerialConnectText));
                 OnPropertyChanged(nameof(StatusBrush));
             });
 
-            RemoteModeCommand = new RelayCommand(async _ => await Serial.SendRemoteAsync());
-            LocalModeCommand = new RelayCommand(async _ => await Serial.SendLocalAsync());
+            RemoteModeCommand = new RelayCommand(async _ => await Controller.SetRemoteModeAsync());
+            LocalModeCommand = new RelayCommand(async _ => await Controller.SetLocalModeAsync());
             SetVCommand = new RelayCommand(async _ => await SetVoltageAsync());
             SetICommand = new RelayCommand(async _ => await SetCurrentAsync());
+            OutputOnCommand = new RelayCommand(async _ => await Controller.OutputOnAsync());
+            OutputOffCommand = new RelayCommand(async _ => await Controller.OutputOffAsync());
+            QueryVICommand = new RelayCommand(async _ => await Controller.QueryReadbackAsync());
+        }
 
-            OutputOnCommand = new RelayCommand(async _ =>
+        private void HandleControllerPropertyChanged(string? propertyName)
+        {
+            switch (propertyName)
             {
-                if (await Serial.OutputOnAsync())
-                    IsOutputOn = true;
-            });
+                case nameof(PowerSupplyController.VoltageReadback):
+                    OnPropertyChanged(nameof(Vread));
+                    OnPropertyChanged(nameof(VoltageDisplay));
+                    OnPropertyChanged(nameof(PowerDisplay));
+                    break;
 
-            OutputOffCommand = new RelayCommand(async _ =>
-            {
-                if (await Serial.OutputOffAsync())
-                    IsOutputOn = false;
-            });
+                case nameof(PowerSupplyController.CurrentReadback):
+                    OnPropertyChanged(nameof(Iread));
+                    OnPropertyChanged(nameof(CurrentDisplay));
+                    OnPropertyChanged(nameof(PowerDisplay));
+                    break;
 
-            QueryVICommand = new RelayCommand(async _ => await QueryVI());
+                case nameof(PowerSupplyController.Mode):
+                    OnPropertyChanged(nameof(Mode));
+                    OnPropertyChanged(nameof(DisplayModeLabel));
+                    OnPropertyChanged(nameof(ModeBrush));
+                    break;
+
+                case nameof(PowerSupplyController.IsOutputOn):
+                    OnPropertyChanged(nameof(IsOutputOn));
+                    break;
+            }
         }
 
         private static bool TryParseSetpoint(string text, out double value)
@@ -195,7 +164,8 @@ namespace SPPS2001D_Pro.ViewModels
                 return;
             }
 
-            await Serial.SendSetCurrentAsync(Protocol.Encode6(value));
+            if (!await Controller.SetCurrentAsync(value))
+                Append("Current command was not sent. Check the connection.");
         }
 
         private async Task SetVoltageAsync()
@@ -206,134 +176,49 @@ namespace SPPS2001D_Pro.ViewModels
                 return;
             }
 
-            await Serial.SendSetVoltageAsync(Protocol.Encode6(value));
+            if (!await Controller.SetVoltageAsync(value))
+                Append("Voltage command was not sent. Check the connection.");
         }
 
-        private async Task AutoQueryLoop(CancellationToken ct)
+        private void LogFrameIfEnabled(string frame)
         {
-            DateTime started = DateTime.UtcNow;
+            if (!LoggingEnabled) return;
 
             try
             {
-                while (!ct.IsCancellationRequested && Serial.IsOpen)
-                {
-                    await QueryVI();
+                string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "spps2001d_log.csv");
+                string line = string.Format(
+                    "{0:O},{1:F3},{2:F3},{3},{4}\r\n",
+                    DateTime.Now,
+                    Vread,
+                    Iread,
+                    Mode,
+                    frame);
 
-                    if (!_readbackWarningShown &&
-                        _lastReadbackUtc == DateTime.MinValue &&
-                        (DateTime.UtcNow - started).TotalSeconds > 3)
-                    {
-                        _readbackWarningShown = true;
-                        Append("No readback frames received yet. Check PSU remote/lock state and selected COM port.");
-                    }
-
-                    await Task.Delay(AutoQueryIntervalMs, ct);
-                }
+                File.AppendAllText(path, line);
             }
-            catch (TaskCanceledException) { }
             catch (Exception ex)
             {
-                Append("AutoQuery error: " + ex.Message);
+                Append("Log write error: " + ex.Message);
             }
         }
 
-        private async Task QueryVI()
+        private static void RunOnUi(Action action)
         {
-            await _queryLock.WaitAsync();
-            try
-            {
-                bool gotCurrent = await QueryAndWaitAsync(
-                    Serial.QueryCurrent033Async,
-                    () => _lastCurrentReadbackUtc);
-
-                if (!gotCurrent)
-                {
-                    await QueryAndWaitAsync(
-                        Serial.QueryCurrent000Async,
-                        () => _lastCurrentReadbackUtc);
-                }
-
-                bool gotVoltage = await QueryAndWaitAsync(
-                    Serial.QueryVoltage122Async,
-                    () => _lastVoltageReadbackUtc);
-
-                if (!gotVoltage)
-                {
-                    await QueryAndWaitAsync(
-                        Serial.QueryVoltage000Async,
-                        () => _lastVoltageReadbackUtc);
-                }
-            }
-            finally
-            {
-                _queryLock.Release();
-            }
-        }
-
-        private static async Task<bool> QueryAndWaitAsync(
-            Func<Task<bool>> sendQuery,
-            Func<DateTime> lastResponseUtc)
-        {
-            DateTime before = lastResponseUtc();
-            if (!await sendQuery()) return false;
-
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(ReadbackResponseTimeoutMs);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (lastResponseUtc() > before) return true;
-                await Task.Delay(5);
-            }
-
-            return lastResponseUtc() > before;
-        }
-
-        private void OnFrame(string frame)
-        {
-            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try
-                {
-                    if (frame.StartsWith("<12"))
-                    {
-                        Vread = Protocol.ParseVoltage(frame);
-                        _lastReadbackUtc = DateTime.UtcNow;
-                        _lastVoltageReadbackUtc = DateTime.UtcNow;
-                    }
-                    else if (frame.StartsWith("<14") || frame.StartsWith("<C4"))
-                    {
-                        var r = Protocol.ParseCurrent(frame);
-                        Mode = r.Mode;
-                        Iread = r.A;
-                        _lastReadbackUtc = DateTime.UtcNow;
-                        _lastCurrentReadbackUtc = DateTime.UtcNow;
-                    }
-
-                    if (LoggingEnabled)
-                    {
-                        try
-                        {
-                            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "spps2001d_log.csv");
-                            string line = string.Format("{0:O},{1:F3},{2:F3},{3},{4}\r\n", DateTime.Now, Vread, Iread, Mode, frame);
-                            File.AppendAllText(path, line);
-                        }
-                        catch { }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Append("Parse error: " + ex.Message);
-                }
-            }));
+            if (Application.Current?.Dispatcher == null || Application.Current.Dispatcher.CheckAccess())
+                action();
+            else
+                Application.Current.Dispatcher.BeginInvoke(action);
         }
 
         private void Append(string line)
         {
             Log += $"[{DateTime.Now:HH:mm:ss}] {line}\r\n";
-            OnPropertyChanged(nameof(Log));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        private void OnPropertyChanged([CallerMemberName] string? name = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
     public class RelayCommand : ICommand
