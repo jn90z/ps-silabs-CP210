@@ -13,7 +13,7 @@ namespace SPPS2001D_Pro.ViewModels
 {
     public class MainViewModel : INotifyPropertyChanged
     {
-        public PowerSupplyController Controller { get; } = new();
+        public PowerSupplyController Controller { get; }
         public SerialService Serial => Controller.Serial;
         public bool LoggingEnabled { get; set; }
         public string SerialConnectText => Serial.IsOpen ? "Disconnect" : "Connect";
@@ -81,8 +81,11 @@ namespace SPPS2001D_Pro.ViewModels
         public ICommand RemoteModeCommand { get; }
         public ICommand LocalModeCommand { get; }
 
-        public MainViewModel()
+        public MainViewModel() : this(new PowerSupplyController()) { }
+
+        public MainViewModel(PowerSupplyController controller)
         {
+            Controller = controller ?? throw new ArgumentNullException(nameof(controller));
             _ = Controller.RefreshPortsAsync();
 
             Serial.PropertyChanged += (_, __) =>
@@ -131,19 +134,16 @@ namespace SPPS2001D_Pro.ViewModels
                     OnPropertyChanged(nameof(VoltageDisplay));
                     OnPropertyChanged(nameof(PowerDisplay));
                     break;
-
                 case nameof(PowerSupplyController.CurrentReadback):
                     OnPropertyChanged(nameof(Iread));
                     OnPropertyChanged(nameof(CurrentDisplay));
                     OnPropertyChanged(nameof(PowerDisplay));
                     break;
-
                 case nameof(PowerSupplyController.Mode):
                     OnPropertyChanged(nameof(Mode));
                     OnPropertyChanged(nameof(DisplayModeLabel));
                     OnPropertyChanged(nameof(ModeBrush));
                     break;
-
                 case nameof(PowerSupplyController.IsOutputOn):
                     OnPropertyChanged(nameof(IsOutputOn));
                     break;
@@ -163,7 +163,6 @@ namespace SPPS2001D_Pro.ViewModels
                 Append("Invalid current setpoint. Enter a non-negative number such as 0.100.");
                 return;
             }
-
             if (!await Controller.SetCurrentAsync(value))
                 Append("Current command was not sent. Check the connection.");
         }
@@ -175,7 +174,6 @@ namespace SPPS2001D_Pro.ViewModels
                 Append("Invalid voltage setpoint. Enter a non-negative number such as 12.000.");
                 return;
             }
-
             if (!await Controller.SetVoltageAsync(value))
                 Append("Voltage command was not sent. Check the connection.");
         }
@@ -183,42 +181,25 @@ namespace SPPS2001D_Pro.ViewModels
         private void LogFrameIfEnabled(string frame)
         {
             if (!LoggingEnabled) return;
-
             try
             {
                 string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "spps2001d_log.csv");
-                string line = string.Format(
-                    "{0:O},{1:F3},{2:F3},{3},{4}\r\n",
-                    DateTime.Now,
-                    Vread,
-                    Iread,
-                    Mode,
-                    frame);
-
+                string line = string.Format("{0:O},{1:F3},{2:F3},{3},{4}\r\n", DateTime.Now, Vread, Iread, Mode, frame);
                 File.AppendAllText(path, line);
             }
-            catch (Exception ex)
-            {
-                Append("Log write error: " + ex.Message);
-            }
+            catch (Exception ex) { Append("Log write error: " + ex.Message); }
         }
 
         private static void RunOnUi(Action action)
         {
-            if (Application.Current?.Dispatcher == null || Application.Current.Dispatcher.CheckAccess())
-                action();
-            else
-                Application.Current.Dispatcher.BeginInvoke(action);
+            if (Application.Current?.Dispatcher == null || Application.Current.Dispatcher.CheckAccess()) action();
+            else Application.Current.Dispatcher.BeginInvoke(action);
         }
 
-        private void Append(string line)
-        {
-            Log += $"[{DateTime.Now:HH:mm:ss}] {line}\r\n";
-        }
+        private void Append(string line) { Log += $"[{DateTime.Now:HH:mm:ss}] {line}\r\n"; }
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        private void OnPropertyChanged([CallerMemberName] string? name = null)
-            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
     public class RelayCommand : ICommand
