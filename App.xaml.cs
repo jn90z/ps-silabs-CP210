@@ -18,8 +18,13 @@ namespace SPPS2001D_Pro
             string recipePath = Environment.GetEnvironmentVariable("SPPS_RECIPE_FILE")
                 ?? Path.Combine(AppContext.BaseDirectory, "PowerSupplyRecipes.xlsx");
 
+            string apiUrl = Environment.GetEnvironmentVariable("SPPS_API_URL")
+                ?? "http://127.0.0.1:5187";
+
+            string? apiKey = Environment.GetEnvironmentVariable("SPPS_API_KEY");
+
             var recipeProvider = new ExcelRecipeProvider(recipePath);
-            _apiService = new LocalApiService(_controller, recipeProvider);
+            _apiService = new LocalApiService(_controller, recipeProvider, apiUrl, apiKey);
 
             try
             {
