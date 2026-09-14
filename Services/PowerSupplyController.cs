@@ -7,40 +7,21 @@ using System.Threading.Tasks;
 
 namespace SPPS2001D_Pro.Services
 {
-    public enum ProductionState
-    {
-        NoJob,
-        LoadingRecipe,
-        JobActive,
-        EndingJob,
-        Fault
-    }
+    public enum ProductionState { NoJob, LoadingRecipe, JobActive, EndingJob, Fault }
 
-    /// <summary>
-    /// Application-facing control layer for the power supply.
-    /// UI code and future automation integrations (for example Plex) should use
-    /// this class instead of talking directly to the serial protocol.
-    /// </summary>
     public sealed class PowerSupplyController : INotifyPropertyChanged, IDisposable
     {
         public SerialService Serial { get; }
-
-        private double _voltageReadback;
-        private double _currentReadback;
+        private double _voltageReadback, _currentReadback;
         private string _mode = "(n/a)";
         private bool _isOutputOn;
         private ProductionState _productionState = ProductionState.NoJob;
         private PowerSupplyRecipe? _activeRecipe;
         private CancellationTokenSource? _autoCts;
-        private DateTime _lastReadbackUtc = DateTime.MinValue;
-        private DateTime _lastVoltageReadbackUtc = DateTime.MinValue;
-        private DateTime _lastCurrentReadbackUtc = DateTime.MinValue;
+        private DateTime _lastReadbackUtc = DateTime.MinValue, _lastVoltageReadbackUtc = DateTime.MinValue, _lastCurrentReadbackUtc = DateTime.MinValue;
         private bool _readbackWarningShown;
-        private readonly SemaphoreSlim _queryLock = new(1, 1);
-        private readonly SemaphoreSlim _jobLock = new(1, 1);
-
-        private const int ReadbackResponseTimeoutMs = 100;
-        private const int AutoQueryIntervalMs = 300;
+        private readonly SemaphoreSlim _queryLock = new(1, 1), _jobLock = new(1, 1);
+        private const int ReadbackResponseTimeoutMs = 100, AutoQueryIntervalMs = 300;
 
         public double VoltageReadback { get => _voltageReadback; private set => SetField(ref _voltageReadback, value); }
         public double CurrentReadback { get => _currentReadback; private set => SetField(ref _currentReadback, value); }
@@ -49,285 +30,108 @@ namespace SPPS2001D_Pro.Services
         public ProductionState ProductionState { get => _productionState; private set => SetField(ref _productionState, value); }
         public PowerSupplyRecipe? ActiveRecipe { get => _activeRecipe; private set => SetField(ref _activeRecipe, value); }
         public bool IsJobActive => ProductionState == ProductionState.JobActive && ActiveRecipe is not null;
-
         public event Action<string>? RawFrameReceived;
         public event Action<string>? Message;
 
-        public PowerSupplyController(SerialService? serial = null)
-        {
-            Serial = serial ?? new SerialService();
-            Serial.FrameReceived += OnFrame;
-        }
-
+        public PowerSupplyController(SerialService? serial = null) { Serial = serial ?? new SerialService(); Serial.FrameReceived += OnFrame; }
         public Task RefreshPortsAsync() => Serial.RefreshPortsAsync();
 
         public async Task<bool> ConnectAsync()
         {
             if (Serial.IsOpen) return true;
             if (!await Serial.OpenAsync()) return false;
-
-            _lastReadbackUtc = DateTime.MinValue;
-            _lastVoltageReadbackUtc = DateTime.MinValue;
-            _lastCurrentReadbackUtc = DateTime.MinValue;
+            _lastReadbackUtc = _lastVoltageReadbackUtc = _lastCurrentReadbackUtc = DateTime.MinValue;
             _readbackWarningShown = false;
-
-            _autoCts?.Cancel();
-            _autoCts?.Dispose();
-            _autoCts = new CancellationTokenSource();
+            _autoCts?.Cancel(); _autoCts?.Dispose(); _autoCts = new CancellationTokenSource();
             _ = AutoQueryLoopAsync(_autoCts.Token);
-
             Message?.Invoke("Connected. Response-paced auto-query started.");
             return true;
         }
 
         public async Task DisconnectAsync()
         {
-            _autoCts?.Cancel();
-            await Serial.SafeDisconnectAsync();
-            IsOutputOn = false;
-            ActiveRecipe = null;
-            ProductionState = ProductionState.NoJob;
-            OnPropertyChanged(nameof(IsJobActive));
+            _autoCts?.Cancel(); await Serial.SafeDisconnectAsync(); IsOutputOn = false; ActiveRecipe = null; ProductionState = ProductionState.NoJob; OnPropertyChanged(nameof(IsJobActive));
         }
 
-        public Task<bool> SetVoltageAsync(double volts)
-        {
-            if (volts < 0) throw new ArgumentOutOfRangeException(nameof(volts));
-            return Serial.SendSetVoltageAsync(Protocol.Encode6(volts));
-        }
-
-        public Task<bool> SetCurrentAsync(double amps)
-        {
-            if (amps < 0) throw new ArgumentOutOfRangeException(nameof(amps));
-            return Serial.SendSetCurrentAsync(Protocol.Encode6(amps));
-        }
-
+        public Task<bool> SetVoltageAsync(double volts) { if (volts < 0) throw new ArgumentOutOfRangeException(nameof(volts)); return Serial.SendSetVoltageAsync(Protocol.Encode6(volts)); }
+        public Task<bool> SetCurrentAsync(double amps) { if (amps < 0) throw new ArgumentOutOfRangeException(nameof(amps)); return Serial.SendSetCurrentAsync(Protocol.Encode6(amps)); }
         public Task<bool> SetRemoteModeAsync() => Serial.SendRemoteAsync();
         public Task<bool> SetLocalModeAsync() => Serial.SendLocalAsync();
+        public async Task<bool> OutputOnAsync() { bool sent = await Serial.OutputOnAsync(); if (sent) IsOutputOn = true; return sent; }
+        public async Task<bool> OutputOffAsync() { bool sent = await Serial.OutputOffAsync(); if (sent) IsOutputOn = false; return sent; }
 
-        public async Task<bool> OutputOnAsync()
-        {
-            bool sent = await Serial.OutputOnAsync();
-            if (sent) IsOutputOn = true;
-            return sent;
-        }
-
-        public async Task<bool> OutputOffAsync()
-        {
-            bool sent = await Serial.OutputOffAsync();
-            if (sent) IsOutputOn = false;
-            return sent;
-        }
-
-        /// <summary>
-        /// Loads a production recipe and keeps the output enabled for the lifetime of the job.
-        /// Any previous output is disabled before settings are changed.
-        /// </summary>
         public async Task<bool> LoadJobAsync(PowerSupplyRecipe recipe, CancellationToken ct = default)
         {
-            ArgumentNullException.ThrowIfNull(recipe);
-            ValidateRecipe(recipe);
-
-            await _jobLock.WaitAsync(ct);
+            ArgumentNullException.ThrowIfNull(recipe); ValidateRecipe(recipe); await _jobLock.WaitAsync(ct);
             try
             {
-                ProductionState = ProductionState.LoadingRecipe;
-                OnPropertyChanged(nameof(IsJobActive));
-
-                if (!Serial.IsOpen && !await ConnectAsync())
-                    return SetJobFault("Unable to connect to the power supply while loading the job.");
-
-                // Never change production setpoints while the output is energized.
-                if (!await OutputOffAsync())
-                    return SetJobFault("Unable to turn the power supply output off before loading the recipe.");
-                if (!await SetRemoteModeAsync())
-                    return SetJobFault("Unable to place the power supply in remote mode.");
-                if (!await SetVoltageAsync(recipe.Voltage))
-                    return SetJobFault("Unable to send the recipe voltage.");
-                if (!await SetCurrentAsync(recipe.Current))
-                    return SetJobFault("Unable to send the recipe current.");
-
+                ProductionState = ProductionState.LoadingRecipe; OnPropertyChanged(nameof(IsJobActive));
+                if (!Serial.IsOpen && !await ConnectAsync()) return SetJobFault("Unable to connect to the power supply while loading the job.");
+                if (!await OutputOffAsync()) return SetJobFault("Unable to turn the power supply output off before loading the recipe.");
+                if (!await SetRemoteModeAsync()) return SetJobFault("Unable to place the power supply in remote mode.");
+                if (!await SetVoltageAsync(recipe.Voltage)) return SetJobFault("Unable to send the recipe voltage.");
+                if (!await SetCurrentAsync(recipe.Current)) return SetJobFault("Unable to send the recipe current.");
                 ActiveRecipe = recipe;
-
-                if (!await OutputOnAsync())
-                    return SetJobFault("Recipe loaded, but the power supply output could not be enabled.");
-
-                ProductionState = ProductionState.JobActive;
-                OnPropertyChanged(nameof(IsJobActive));
-                Message?.Invoke($"Job recipe active: {recipe.PartNumber} {recipe.Revision ?? string.Empty} - {recipe.Voltage:0.000} V / {recipe.Current:0.000} A. Output will remain on until the job is unloaded or changed.");
+                if (!await OutputOnAsync()) return SetJobFault("Recipe loaded, but the power supply output could not be enabled.");
+                ProductionState = ProductionState.JobActive; OnPropertyChanged(nameof(IsJobActive));
+                Message?.Invoke($"Job recipe active: {recipe.PartNumber} - {recipe.Voltage:0.000} V / {recipe.Current:0.000} A. Output will remain on until the job is unloaded or changed.");
                 return true;
             }
-            catch (OperationCanceledException)
-            {
-                await OutputOffAsync();
-                ActiveRecipe = null;
-                ProductionState = ProductionState.NoJob;
-                OnPropertyChanged(nameof(IsJobActive));
-                throw;
-            }
-            catch (Exception ex)
-            {
-                try { await OutputOffAsync(); } catch { }
-                return SetJobFault("Job load failed: " + ex.Message);
-            }
-            finally
-            {
-                _jobLock.Release();
-            }
+            catch (OperationCanceledException) { await OutputOffAsync(); ActiveRecipe = null; ProductionState = ProductionState.NoJob; OnPropertyChanged(nameof(IsJobActive)); throw; }
+            catch (Exception ex) { try { await OutputOffAsync(); } catch { } return SetJobFault("Job load failed: " + ex.Message); }
+            finally { _jobLock.Release(); }
         }
 
-        public async Task<bool> LoadJobAsync(
-            string partNumber,
-            string? revision,
-            IRecipeProvider recipeProvider,
-            CancellationToken ct = default)
+        public async Task<bool> LoadJobAsync(string partNumber, IRecipeProvider recipeProvider, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(recipeProvider);
-            var recipe = await recipeProvider.GetRecipeAsync(partNumber, revision, ct);
-            if (recipe is null)
-            {
-                await OutputOffAsync();
-                ActiveRecipe = null;
-                return SetJobFault($"No power-supply recipe found for {partNumber}{(string.IsNullOrWhiteSpace(revision) ? string.Empty : $" revision {revision}")}.");
-            }
-
+            var recipe = await recipeProvider.GetRecipeAsync(partNumber, ct);
+            if (recipe is null) { await OutputOffAsync(); ActiveRecipe = null; return SetJobFault($"No power-supply recipe found for part number {partNumber}."); }
             return await LoadJobAsync(recipe, ct);
         }
 
         public async Task<bool> UnloadJobAsync(CancellationToken ct = default)
         {
             await _jobLock.WaitAsync(ct);
-            try
-            {
-                ProductionState = ProductionState.EndingJob;
-                OnPropertyChanged(nameof(IsJobActive));
-                bool off = await OutputOffAsync();
-                ActiveRecipe = null;
-                ProductionState = off ? ProductionState.NoJob : ProductionState.Fault;
-                OnPropertyChanged(nameof(IsJobActive));
-                Message?.Invoke(off ? "Job unloaded. Power supply output is off." : "Job ended, but output-off command failed.");
-                return off;
-            }
-            finally
-            {
-                _jobLock.Release();
-            }
+            try { ProductionState = ProductionState.EndingJob; OnPropertyChanged(nameof(IsJobActive)); bool off = await OutputOffAsync(); ActiveRecipe = null; ProductionState = off ? ProductionState.NoJob : ProductionState.Fault; OnPropertyChanged(nameof(IsJobActive)); Message?.Invoke(off ? "Job unloaded. Power supply output is off." : "Job ended, but output-off command failed."); return off; }
+            finally { _jobLock.Release(); }
         }
 
         private static void ValidateRecipe(PowerSupplyRecipe recipe)
         {
-            if (string.IsNullOrWhiteSpace(recipe.PartNumber))
-                throw new ArgumentException("Recipe part number is required.", nameof(recipe));
-            if (recipe.Voltage < 0 || recipe.Current < 0)
-                throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe voltage/current cannot be negative.");
-            if (recipe.MaxVoltage.HasValue && recipe.Voltage > recipe.MaxVoltage.Value)
-                throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe voltage exceeds MaxVoltage.");
-            if (recipe.MaxCurrent.HasValue && recipe.Current > recipe.MaxCurrent.Value)
-                throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe current exceeds MaxCurrent.");
+            if (string.IsNullOrWhiteSpace(recipe.PartNumber)) throw new ArgumentException("Recipe part number is required.", nameof(recipe));
+            if (recipe.Voltage < 0 || recipe.Current < 0) throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe voltage/current cannot be negative.");
+            if (recipe.MaxVoltage.HasValue && recipe.Voltage > recipe.MaxVoltage.Value) throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe voltage exceeds MaxVoltage.");
+            if (recipe.MaxCurrent.HasValue && recipe.Current > recipe.MaxCurrent.Value) throw new ArgumentOutOfRangeException(nameof(recipe), "Recipe current exceeds MaxCurrent.");
         }
-
-        private bool SetJobFault(string message)
-        {
-            ProductionState = ProductionState.Fault;
-            OnPropertyChanged(nameof(IsJobActive));
-            Message?.Invoke(message);
-            return false;
-        }
+        private bool SetJobFault(string message) { ProductionState = ProductionState.Fault; OnPropertyChanged(nameof(IsJobActive)); Message?.Invoke(message); return false; }
 
         public async Task QueryReadbackAsync(CancellationToken ct = default)
         {
             await _queryLock.WaitAsync(ct);
-            try
-            {
-                bool gotCurrent = await QueryAndWaitAsync(Serial.QueryCurrent033Async, () => _lastCurrentReadbackUtc, ct);
-                if (!gotCurrent && !ct.IsCancellationRequested)
-                    await QueryAndWaitAsync(Serial.QueryCurrent000Async, () => _lastCurrentReadbackUtc, ct);
-
-                bool gotVoltage = await QueryAndWaitAsync(Serial.QueryVoltage122Async, () => _lastVoltageReadbackUtc, ct);
-                if (!gotVoltage && !ct.IsCancellationRequested)
-                    await QueryAndWaitAsync(Serial.QueryVoltage000Async, () => _lastVoltageReadbackUtc, ct);
-            }
+            try { bool gotCurrent = await QueryAndWaitAsync(Serial.QueryCurrent033Async, () => _lastCurrentReadbackUtc, ct); if (!gotCurrent && !ct.IsCancellationRequested) await QueryAndWaitAsync(Serial.QueryCurrent000Async, () => _lastCurrentReadbackUtc, ct); bool gotVoltage = await QueryAndWaitAsync(Serial.QueryVoltage122Async, () => _lastVoltageReadbackUtc, ct); if (!gotVoltage && !ct.IsCancellationRequested) await QueryAndWaitAsync(Serial.QueryVoltage000Async, () => _lastVoltageReadbackUtc, ct); }
             finally { _queryLock.Release(); }
         }
-
         private async Task AutoQueryLoopAsync(CancellationToken ct)
         {
             DateTime started = DateTime.UtcNow;
-            try
-            {
-                while (!ct.IsCancellationRequested && Serial.IsOpen)
-                {
-                    await QueryReadbackAsync(ct);
-                    if (!_readbackWarningShown && _lastReadbackUtc == DateTime.MinValue && (DateTime.UtcNow - started).TotalSeconds > 3)
-                    {
-                        _readbackWarningShown = true;
-                        Message?.Invoke("No readback frames received yet. Check PSU remote/lock state and selected COM port.");
-                    }
-                    await Task.Delay(AutoQueryIntervalMs, ct);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { Message?.Invoke("AutoQuery error: " + ex.Message); }
+            try { while (!ct.IsCancellationRequested && Serial.IsOpen) { await QueryReadbackAsync(ct); if (!_readbackWarningShown && _lastReadbackUtc == DateTime.MinValue && (DateTime.UtcNow - started).TotalSeconds > 3) { _readbackWarningShown = true; Message?.Invoke("No readback frames received yet. Check PSU remote/lock state and selected COM port."); } await Task.Delay(AutoQueryIntervalMs, ct); } }
+            catch (OperationCanceledException) { } catch (Exception ex) { Message?.Invoke("AutoQuery error: " + ex.Message); }
         }
-
         private static async Task<bool> QueryAndWaitAsync(Func<Task<bool>> sendQuery, Func<DateTime> lastResponseUtc, CancellationToken ct)
         {
-            DateTime before = lastResponseUtc();
-            if (!await sendQuery()) return false;
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(ReadbackResponseTimeoutMs);
-            while (DateTime.UtcNow < deadline)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (lastResponseUtc() > before) return true;
-                await Task.Delay(5, ct);
-            }
+            DateTime before = lastResponseUtc(); if (!await sendQuery()) return false; DateTime deadline = DateTime.UtcNow.AddMilliseconds(ReadbackResponseTimeoutMs);
+            while (DateTime.UtcNow < deadline) { ct.ThrowIfCancellationRequested(); if (lastResponseUtc() > before) return true; await Task.Delay(5, ct); }
             return lastResponseUtc() > before;
         }
-
         private void OnFrame(string frame)
         {
-            try
-            {
-                if (frame.StartsWith("<12"))
-                {
-                    VoltageReadback = Protocol.ParseVoltage(frame);
-                    DateTime now = DateTime.UtcNow;
-                    _lastReadbackUtc = now;
-                    _lastVoltageReadbackUtc = now;
-                }
-                else if (frame.StartsWith("<14") || frame.StartsWith("<C4"))
-                {
-                    var parsed = Protocol.ParseCurrent(frame);
-                    Mode = parsed.Mode;
-                    CurrentReadback = parsed.A;
-                    DateTime now = DateTime.UtcNow;
-                    _lastReadbackUtc = now;
-                    _lastCurrentReadbackUtc = now;
-                }
-                RawFrameReceived?.Invoke(frame);
-            }
+            try { if (frame.StartsWith("<12")) { VoltageReadback = Protocol.ParseVoltage(frame); DateTime now = DateTime.UtcNow; _lastReadbackUtc = _lastVoltageReadbackUtc = now; } else if (frame.StartsWith("<14") || frame.StartsWith("<C4")) { var parsed = Protocol.ParseCurrent(frame); Mode = parsed.Mode; CurrentReadback = parsed.A; DateTime now = DateTime.UtcNow; _lastReadbackUtc = _lastCurrentReadbackUtc = now; } RawFrameReceived?.Invoke(frame); }
             catch (Exception ex) { Message?.Invoke("Parse error: " + ex.Message); }
         }
-
-        public void Dispose()
-        {
-            _autoCts?.Cancel();
-            _autoCts?.Dispose();
-            Serial.FrameReceived -= OnFrame;
-            Serial.Dispose();
-            _queryLock.Dispose();
-            _jobLock.Dispose();
-        }
-
+        public void Dispose() { _autoCts?.Cancel(); _autoCts?.Dispose(); Serial.FrameReceived -= OnFrame; Serial.Dispose(); _queryLock.Dispose(); _jobLock.Dispose(); }
         public event PropertyChangedEventHandler? PropertyChanged;
-        private void OnPropertyChanged([CallerMemberName] string? name = null)
-            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-
-        private void SetField<T>(ref T field, T value, [CallerMemberName] string? name = null)
-        {
-            if (EqualityComparer<T>.Default.Equals(field, value)) return;
-            field = value;
-            OnPropertyChanged(name);
-        }
+        private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        private void SetField<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; OnPropertyChanged(name); }
     }
 }
